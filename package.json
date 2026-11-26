@@ -1,0 +1,20 @@
+{
+  "name": "node-gestor-gastos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gestor de gastos local multiusuario con MongoDB, autenticación y listas privadas",
+  "type": "module",
+  "engines": {
+    "node": "26.x"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "check": "node --check src/app.js && node --check public/app.js",
+    "user": "node scripts/user.js"
+  },
+  "dependencies": {
+    "mongodb": "^7.9.1"
+  }
+}

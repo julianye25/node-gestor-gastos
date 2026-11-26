@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acceso · Gestor de Gastos</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="auth-page">
+    <main class="auth-shell">
+      <section class="panel auth-card">
+        <div class="brand auth-brand">
+          <span class="brand-icon" aria-hidden="true">$</span>
+          <div>
+            <h1>Gestor de Gastos<span class="title-cursor" aria-hidden="true"></span></h1>
+            <p class="subtitle">Acceso privado</p>
+          </div>
+        </div>
+
+        <p class="auth-lede">
+          Entra con tu cuenta para ver y gestionar tus gastos. Cada persona tiene su propia lista.
+        </p>
+
+        <form id="login-form" novalidate>
+          <div class="field">
+            <label for="username">Usuario</label>
+            <input
+              id="username"
+              name="username"
+              type="text"
+              autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="password">Contraseña</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+
+          <p class="auth-error" id="auth-error" role="alert" hidden></p>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn--primary" id="login-btn">Entrar</button>
+          </div>
+        </form>
+
+        <p class="auth-links">
+          ¿No tienes cuenta? <a href="/register.html">Crear una</a>
+        </p>
+      </section>
+    </main>
+
+    <script type="module" src="/login.js"></script>
+  </body>
+</html>

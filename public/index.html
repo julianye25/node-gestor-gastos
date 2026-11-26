@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gestor de Gastos</title>
+    <meta name="description" content="Gestor de gastos personal con totales por mes y por categoría en pesos colombianos" />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container header-row">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">$</span>
+          <div>
+            <h1>Gestor de Gastos<span class="title-cursor" aria-hidden="true"></span></h1>
+            <p class="subtitle">Controla en qué se va tu dinero</p>
+          </div>
+        </div>
+        <div class="user-box">
+          <span class="user-name" id="current-user">—</span>
+          <button type="button" class="btn btn--ghost btn--small" id="logout-btn">Salir</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="cards" aria-label="Resumen de totales">
+        <article class="card card--primary">
+          <p class="card-label">Total del mes</p>
+          <p class="card-value" id="total-month">—</p>
+          <p class="card-hint" id="total-month-hint">—</p>
+        </article>
+        <article class="card">
+          <p class="card-label">Total general</p>
+          <p class="card-value" id="total-general">—</p>
+          <p class="card-hint" id="total-general-hint">—</p>
+        </article>
+        <article class="card">
+          <p class="card-label">Gastos del mes</p>
+          <p class="card-value" id="count-month">—</p>
+          <p class="card-hint">registros</p>
+        </article>
+      </section>
+
+      <div class="layout">
+        <section class="panel">
+          <h2 id="form-title">Nuevo gasto</h2>
+          <form id="expense-form" novalidate>
+            <div class="field">
+              <label for="amount">Importe (<span id="currency-symbol">€</span>)</label>
+              <input
+                id="amount"
+                name="amount"
+                type="text"
+                inputmode="decimal"
+                autocomplete="off"
+                placeholder="25000"
+                required
+              />
+            </div>
+
+            <div class="field">
+              <label for="category">Categoría</label>
+              <select id="category" name="category" required></select>
+            </div>
+
+            <div class="field">
+              <label for="date">Fecha</label>
+              <input id="date" name="date" type="date" required />
+            </div>
+
+            <div class="field">
+              <label for="description">Descripción <span class="optional">(opcional)</span></label>
+              <input
+                id="description"
+                name="description"
+                type="text"
+                maxlength="200"
+                placeholder="Ej. Compra del supermercado"
+              />
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn--primary" id="submit-btn">Añadir gasto</button>
+              <button type="button" class="btn btn--ghost" id="cancel-btn" hidden>Cancelar</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>Totales por categoría</h2>
+          <p class="panel-hint" id="breakdown-month">—</p>
+          <ul class="breakdown" id="breakdown"></ul>
+        </section>
+      </div>
+
+      <section class="panel panel--table">
+        <div class="panel-head">
+          <h2>Gastos</h2>
+          <div class="filters">
+            <label class="sr-only" for="month-filter">Filtrar por mes</label>
+            <select id="month-filter"></select>
+
+            <label class="sr-only" for="category-filter">Filtrar por categoría</label>
+            <select id="category-filter"></select>
+
+            <button type="button" class="btn btn--ghost btn--small" id="export-btn">
+              Guardar copia
+            </button>
+          </div>
+        </div>
+
+        <div class="table-wrap" id="table-wrap">
+          <table>
+            <caption class="sr-only">Lista de gastos del periodo seleccionado</caption>
+            <thead>
+              <tr>
+                <th scope="col">Fecha</th>
+                <th scope="col">Categoría</th>
+                <th scope="col">Descripción</th>
+                <th scope="col" class="num">Importe</th>
+                <th scope="col" class="actions-col">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="expenses-body"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="empty-state" hidden>No hay gastos en el mes seleccionado.</p>
+      </section>
+
+      <footer class="app-footer">
+        Tus gastos se guardan en tu cuenta y solo tú puedes verlos.
+      </footer>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

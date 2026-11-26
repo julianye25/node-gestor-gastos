@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <clipPath id="cut">
+      <polygon points="0,0 48,0 64,16 64,64 0,64" />
+    </clipPath>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.2" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="4" fill="#06070b" />
+  <g clip-path="url(#cut)">
+    <rect x="1" y="1" width="62" height="62" rx="3" fill="none" stroke="#00e5ff" stroke-opacity=".55" />
+    <path d="M8 52h48" stroke="#ff2bd6" stroke-opacity=".55" stroke-width="1.5" />
+    <text
+      x="32"
+      y="41"
+      text-anchor="middle"
+      font-family="ui-monospace, Menlo, Consolas, monospace"
+      font-size="30"
+      font-weight="700"
+      fill="#00e5ff"
+      filter="url(#glow)"
+    >$</text>
+  </g>
+</svg>
