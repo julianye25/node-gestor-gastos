@@ -4,6 +4,8 @@ Aplicación web **local y multiusuario** para registrar gastos y ver los totales
 
 Hecha con Node.js puro y MongoDB. El frontend es HTML/CSS/JavaScript sin bundler, con un tema cyberpunk minimalista.
 
+Incluye un **modo demo** pensado para un despliegue público en Render: cuentas temporales, datos de ejemplo y rotación de cupos. La guía manual está en [`docs/render-demo.md`](docs/render-demo.md).
+
 ## Características
 
 - Hasta **4 cuentas** (`MAX_USERS`), creadas con un **código de invitación**.
@@ -14,10 +16,11 @@ Hecha con Node.js puro y MongoDB. El frontend es HTML/CSS/JavaScript sin bundler
 - Exportación de los gastos a JSON.
 - Formato de moneda COP con 0 decimales.
 - Interfaz y mensajes de error en español.
+- Modo demo opcional: cuentas de 24 h, 14 gastos de ejemplo, limpieza automática y rotación de la cuenta más antigua.
 
 ## Requisitos
 
-- Node.js **26.13.1** (fijado en `.node-version`).
+- Node.js **26.13.1** en local (fijado en `.node-version`). En Render también funciona **24.22.1**.
 - [fnm](https://github.com/Schniz/fnm) para cambiar de versión.
 - MongoDB: **Atlas gratuito** o **MongoDB local**.
 
@@ -90,9 +93,14 @@ docker run -d --name gestor-mongo -p 27017:27017 -v gestor-mongo-data:/data/db m
 | `REGISTRATION_CODE` | vacío | Código de invitación. Si está vacío, el registro está cerrado |
 | `MAX_USERS` | `4` | Número máximo de cuentas |
 | `CURRENCY` | `COP` | Código ISO de 3 letras |
-| `HOST` | `127.0.0.1` | Interfaz de escucha; déjalo así para que sea solo local |
-| `PORT` | `3000` | Puerto |
+| `HOST` | `127.0.0.1` | Interfaz de escucha; en Render usa `0.0.0.0` |
+| `PORT` | `3000` | Puerto; Render lo define automáticamente |
 | `COOKIE_SECURE` | sin definir | Pon `1` solo si sirves la app por HTTPS |
+| `DEMO_MODE` | `0` | `1` activa cuentas temporales y datos de ejemplo |
+| `DEMO_USER_TTL_HOURS` | `24` | Horas que dura una cuenta demo |
+| `RATE_LIMIT_WINDOW_MINUTES` | `15` | Ventana del límite de intentos |
+| `RATE_LIMIT_MAX_ATTEMPTS` | `10` | Intentos permitidos por IP y ventana |
+| `NODE_VERSION` | — | Solo en Render; usa `26.13.1` o `24.22.1` |
 
 `.env` contiene secretos y está en `.gitignore`. No lo subas al repositorio.
 
@@ -130,12 +138,12 @@ Todas las rutas devuelven JSON. Las que requieren sesión usan la cookie `gg_ses
 
 | Método | Ruta | Sesión | Descripción |
 |---|---|---|---|
-| `GET` | `/api/health` | No | Comprueba que el servidor responde |
+| `GET` | `/api/health` | No | Comprueba que el servidor responde e informa si el demo está activo |
 | `POST` | `/api/register` | No | Crea una cuenta con `inviteCode`, `username` y `password` |
 | `POST` | `/api/login` | No | Inicia sesión con `username` y `password` |
 | `POST` | `/api/logout` | No | Borra la cookie de sesión |
 | `GET` | `/api/me` | Sí | Devuelve el usuario actual |
-| `GET` | `/api/meta` | Sí | Categorías y moneda |
+| `GET` | `/api/meta` | Sí | Categorías, moneda e información del modo demo |
 | `GET` | `/api/expenses` | Sí | Lista gastos; admite `month=YYYY-MM` y `category` |
 | `POST` | `/api/expenses` | Sí | Crea un gasto |
 | `GET` | `/api/expenses/:id` | Sí | Devuelve un gasto propio |
@@ -187,6 +195,7 @@ curl -s -b cookies.txt -X POST http://127.0.0.1:3000/api/logout
 | `404` | Gasto o ruta no encontrada |
 | `409` | El usuario ya existe |
 | `413` | Cuerpo de la petición demasiado grande |
+| `429` | Demasiados intentos de login o registro; espera la ventana indicada |
 | `503` | No se pudo conectar con MongoDB |
 
 ## Datos y dinero
@@ -206,6 +215,8 @@ curl -s -b cookies.txt -X POST http://127.0.0.1:3000/api/logout
   username,
   usernameLower,   // único, para login sin distinguir mayúsculas
   passwordHash,    // scrypt$N$r$p$salt$hash
+  demo,            // true en cuentas temporales del demo
+  expiresAt,       // fecha de caducidad o null
   createdAt
 }
 
@@ -225,6 +236,7 @@ curl -s -b cookies.txt -X POST http://127.0.0.1:3000/api/logout
 Índices:
 
 - `users.usernameLower` único.
+- `users { demo: 1, createdAt: 1 }` y `users { demo: 1, expiresAt: 1 }` para la limpieza del demo.
 - `expenses { ownerId: 1, date: -1, createdAt: -1 }`.
 - `expenses { ownerId: 1, category: 1, date: -1 }`.
 
@@ -236,13 +248,35 @@ Todas las consultas filtran por `ownerId`. Si intentas acceder a un gasto de otr
 - Atlas gratuito no incluye backups automáticos. Si quieres una copia completa, puedes usar `mongodump` con tu cadena de conexión.
 - La exportación incluye solo los gastos del usuario que la solicita.
 
+## Demo en Render
+
+El modo demo permite publicar una versión de prueba sin mezclar datos con la app real:
+
+- Cada registro con el código crea una cuenta `demo` con caducidad de 24 h.
+- Se añaden 14 gastos de ejemplo en COP para que el panel se vea completo.
+- Al llegar a 4 cuentas, se libera la demo más antigua.
+- La limpieza borra cuentas caducadas y sus gastos cada hora.
+- Login y registro tienen límite de intentos; el demo no se indexa en buscadores.
+
+La guía manual completa (Atlas, Render, variables, pruebas y problemas frecuentes) está en [`docs/render-demo.md`](docs/render-demo.md).
+
+Variables mínimas del demo:
+
+```bash
+DEMO_MODE=1
+DEMO_USER_TTL_HOURS=24
+HOST=0.0.0.0
+COOKIE_SECURE=1
+MONGODB_DB=gestor_gastos_demo
+```
+
 ## Tests
 
 ```bash
 npm test
 ```
 
-Los tests usan repositorios en memoria y **no tocan tu base de datos real**. Cubren validaciones, contraseñas, cookies de sesión, registro, login, aislamiento entre usuarios, resumen y exportación.
+Los tests usan repositorios en memoria y **no tocan tu base de datos real**. Cubren validaciones, contraseñas, cookies de sesión, registro, login, aislamiento entre usuarios, resumen, exportación y modo demo (siembra, caducidad, rotación y rate limit).
 
 Para probar también contra MongoDB, define una base de pruebas desechable:
 
@@ -255,12 +289,14 @@ El test crea una base con nombre aleatorio y la borra al terminar. **No uses tu 
 ## Seguridad y limitaciones
 
 - Contraseñas con `scrypt` y comparación en tiempo constante.
-- Cookie `gg_session` `HttpOnly`, `SameSite=Lax`, `Path=/`; `Secure` solo con HTTPS.
+- Cookie `gg_session` `HttpOnly`, `SameSite=Lax`, `Path=/`; `Secure` con HTTPS.
 - Registro cerrado con código de invitación y límite de cuentas.
 - Comprobación de `Origin` en peticiones que modifican datos.
 - Cuerpo máximo de 1 MB.
-- Sin límite de intentos de login, sin revocación de sesión al cambiar contraseña y sin recuperación de contraseña por email. Para cambiar una contraseña usa `npm run user -- passwd`.
-- La app escucha en `127.0.0.1`: no es accesible desde otros equipos de la red.
+- Límite de intentos en login y registro (`429`).
+- En modo demo: cuentas temporales, rotación, `X-Robots-Tag: noindex` y `robots.txt` cerrado.
+- Sin revocación de sesión al cambiar contraseña y sin recuperación de contraseña por email. Para cambiar una contraseña usa `npm run user -- passwd`.
+- La app escucha en `127.0.0.1` por defecto: no es accesible desde otros equipos de la red. En Render debe usarse `HOST=0.0.0.0`.
 - Si el equipo es compartido, cualquier persona con acceso al sistema y a MongoDB podría leer los datos por fuera de la app.
 
 ## Estructura
@@ -272,6 +308,8 @@ El test crea una base con nombre aleatorio y la borra al terminar. **No uses tu 
 │   ├── app.js         # Rutas, autenticación y errores
 │   ├── domain.js      # Validaciones, categorías y errores
 │   ├── mongo.js       # Repositorios e índices de MongoDB
+│   ├── demo.js        # Datos de ejemplo, caducidad y rotación
+│   ├── rate-limit.js  # Límite de intentos en memoria
 │   ├── users.js       # Hash y verificación de contraseñas
 │   ├── auth.js        # Firma y lectura de cookies de sesión
 │   ├── config.js      # Variables de entorno
@@ -284,10 +322,13 @@ El test crea una base con nombre aleatorio y la borra al terminar. **No uses tu 
 │   ├── register.html  # Registro con invitación
 │   ├── register.js
 │   ├── styles.css     # Tema cyberpunk
+│   ├── robots.txt     # Bloquea la indexación del demo
 │   └── favicon.svg
 ├── scripts/
 │   └── user.js        # Administración de cuentas
-├── test/              # Tests de dominio, auth, API y resumen
+├── docs/
+│   └── render-demo.md # Guía manual del demo en Render
+├── test/              # Tests de dominio, auth, API, demo y resumen
 ├── test-support/      # Repositorios y servidor en memoria
 ├── data/              # Datos del sistema anterior (legado)
 ├── .env.example

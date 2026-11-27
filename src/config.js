@@ -19,6 +19,22 @@ export function loadConfig(env = process.env) {
     throw new Error('CURRENCY debe ser un código ISO de 3 letras, por ejemplo COP');
   }
 
+  const demoMode = env.DEMO_MODE === '1';
+  const demoUserTtlHours = Number(env.DEMO_USER_TTL_HOURS ?? 24);
+  if (!Number.isFinite(demoUserTtlHours) || demoUserTtlHours <= 0) {
+    throw new Error('DEMO_USER_TTL_HOURS debe ser un número mayor que cero');
+  }
+
+  const rateLimitWindowMinutes = Number(env.RATE_LIMIT_WINDOW_MINUTES ?? 15);
+  if (!Number.isFinite(rateLimitWindowMinutes) || rateLimitWindowMinutes <= 0) {
+    throw new Error('RATE_LIMIT_WINDOW_MINUTES debe ser un número mayor que cero');
+  }
+
+  const rateLimitMaxAttempts = Number(env.RATE_LIMIT_MAX_ATTEMPTS ?? 10);
+  if (!Number.isInteger(rateLimitMaxAttempts) || rateLimitMaxAttempts <= 0) {
+    throw new Error('RATE_LIMIT_MAX_ATTEMPTS debe ser un entero mayor que cero');
+  }
+
   return {
     currency,
     sessionSecret,
@@ -26,6 +42,10 @@ export function loadConfig(env = process.env) {
     registrationCode: env.REGISTRATION_CODE ?? '',
     maxUsers,
     secureCookies: env.COOKIE_SECURE === '1',
+    demoMode,
+    demoUserTtlHours,
+    rateLimitWindowMinutes,
+    rateLimitMaxAttempts,
     mongo: {
       uri: env.MONGODB_URI ?? '',
       dbName: env.MONGODB_DB ?? 'gestor_gastos',

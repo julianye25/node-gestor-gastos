@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createMongoRepositories } from './mongo.js';
+import { startDemoCleanup } from './demo.js';
 import { ValidationError } from './domain.js';
 
 try {
@@ -47,7 +48,23 @@ if (!config.mongo.uri) {
 }
 
 const { expenses, users, close } = createMongoRepositories(config.mongo);
+
+try {
+  await users.count();
+  console.log(
+    `   MongoDB: conectado (${config.mongo.dbName}/${config.mongo.expensesCollection})`,
+  );
+} catch (error) {
+  console.error(
+    '[mongo] No se pudo conectar con MongoDB. Revisa MONGODB_URI, la red y la lista de acceso de Atlas.',
+  );
+  console.error(`[mongo] ${error.message}`);
+  await close().catch(() => {});
+  process.exit(1);
+}
+
 const app = createApp({ expenses, users, config });
+const stopDemoCleanup = config.demoMode ? startDemoCleanup({ users }) : null;
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -110,6 +127,13 @@ async function handleStatic(req, res, url) {
 }
 
 const server = createServer(async (req, res) => {
+  if (config.secureCookies) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  if (config.demoMode) {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  }
+
   let url;
   try {
     url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${HOST}:${PORT}`}`);
@@ -133,8 +157,10 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`💰 Gestor de gastos: http://${HOST}:${PORT}`);
-  console.log(`   MongoDB: ${config.mongo.dbName}/${config.mongo.expensesCollection}`);
   console.log(`   Usuarios máximos: ${config.maxUsers}`);
+  if (config.demoMode) {
+    console.log(`   Modo demo: cuentas de ${config.demoUserTtlHours} h`);
+  }
 });
 
 let shuttingDown = false;
@@ -142,6 +168,8 @@ let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+
+  stopDemoCleanup?.();
 
   server.close(async () => {
     try {

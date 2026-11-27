@@ -22,6 +22,25 @@ async function checkSession() {
   }
 }
 
+async function loadDemoNotice() {
+  const note = document.querySelector('#demo-note');
+  if (!note) return;
+
+  try {
+    const response = await fetch('/api/health');
+    if (!response.ok) return;
+
+    const data = await response.json();
+    if (!data.demo?.enabled) return;
+
+    const hours = Number(data.demo.ttlHours) || 24;
+    note.textContent = `Modo demo: la cuenta y sus datos se eliminan a las ${hours} h. Si hay 4 cuentas activas, la más antigua se libera.`;
+    note.hidden = false;
+  } catch {
+    // Sin conexión: el formulario sigue funcionando.
+  }
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   clearError();
@@ -72,3 +91,4 @@ form.addEventListener('submit', async (event) => {
 });
 
 checkSession();
+loadDemoNotice();

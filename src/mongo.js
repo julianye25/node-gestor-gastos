@@ -24,6 +24,10 @@ function getClient(uri) {
       throw error;
     });
 
+    // Evita que un fallo de conexión al arrancar tumbe el proceso por una
+    // promesa rechazada sin manejar. Quien la consuma sigue recibiendo el error.
+    promise.catch(() => {});
+
     clients.set(uri, promise);
   }
 
@@ -59,6 +63,8 @@ function toUser(doc) {
     username: doc.username,
     usernameLower: doc.usernameLower,
     passwordHash: doc.passwordHash,
+    demo: doc.demo === true,
+    expiresAt: isoDate(doc.expiresAt),
     createdAt: isoDate(doc.createdAt),
   };
 }
@@ -73,7 +79,7 @@ function sortExpenses(expenses) {
 
 /**
  * Crea los repositorios de gastos y usuarios sobre MongoDB.
- * El cliente se reutiliza entre invocaciones (importante en Vercel Functions).
+ * El cliente se reutiliza entre peticiones y se cierra al apagar el servidor.
  */
 export function createMongoRepositories({
   uri,
@@ -104,6 +110,8 @@ export function createMongoRepositories({
           { usernameLower: 1 },
           { unique: true },
         );
+        await database.collection(usersCollection).createIndex({ demo: 1, createdAt: 1 });
+        await database.collection(usersCollection).createIndex({ demo: 1, expiresAt: 1 });
       })().catch((error) => {
         indexesPromise = null;
         throw error;
@@ -169,6 +177,22 @@ export function createMongoRepositories({
       return toExpense({ ...doc, _id: result.insertedId });
     },
 
+    async createMany(ownerId, inputs) {
+      if (!Array.isArray(inputs) || inputs.length === 0) return [];
+
+      const createdAt = new Date();
+      const docs = inputs.map((input) => ({
+        ownerId,
+        ...validateExpense(input),
+        createdAt,
+        updatedAt: null,
+      }));
+
+      const collection = await expensesCollectionRef();
+      const result = await collection.insertMany(docs);
+      return docs.map((doc, index) => toExpense({ ...doc, _id: result.insertedIds[index] }));
+    },
+
     async update(ownerId, id, input) {
       const objectId = toObjectId(id);
       if (!objectId) throw new NotFoundError('Gasto no encontrado');
@@ -218,12 +242,14 @@ export function createMongoRepositories({
       return collection.countDocuments();
     },
 
-    async create({ username, usernameLower, passwordHash }) {
+    async create({ username, usernameLower, passwordHash, demo = false, expiresAt = null }) {
       const collection = await usersCollectionRef();
       const doc = {
         username,
         usernameLower,
         passwordHash,
+        demo: Boolean(demo),
+        expiresAt: expiresAt ?? null,
         createdAt: new Date(),
       };
 
@@ -280,6 +306,41 @@ export function createMongoRepositories({
       const collection = await usersCollectionRef();
       const docs = await collection.find({}).sort({ createdAt: 1 }).toArray();
       return docs.map(toUser);
+    },
+
+    async findOldestDemo() {
+      const collection = await usersCollectionRef();
+      const doc = await collection.findOne({ demo: true }, { sort: { createdAt: 1 } });
+      return doc ? toUser(doc) : null;
+    },
+
+    async removeOldestDemo() {
+      const collection = await usersCollectionRef();
+      const result = await collection.findOneAndDelete(
+        { demo: true },
+        { sort: { createdAt: 1 } },
+      );
+      const doc = result && result.value !== undefined ? result.value : result;
+      if (!doc) return null;
+
+      const ownerId = doc._id.toHexString();
+      const expensesCollection = await expensesCollectionRef();
+      await expensesCollection.deleteMany({ ownerId });
+      return toUser(doc);
+    },
+
+    async removeExpiredDemo(now = new Date()) {
+      const collection = await usersCollectionRef();
+      const docs = await collection
+        .find({ demo: true, expiresAt: { $lte: now } })
+        .toArray();
+      if (docs.length === 0) return 0;
+
+      const ownerIds = docs.map((doc) => doc._id.toHexString());
+      const expensesCollection = await expensesCollectionRef();
+      await expensesCollection.deleteMany({ ownerId: { $in: ownerIds } });
+      await collection.deleteMany({ _id: { $in: docs.map((doc) => doc._id) } });
+      return docs.length;
     },
   };
 

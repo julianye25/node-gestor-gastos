@@ -60,6 +60,16 @@ export class ServiceUnavailableError extends AppError {
   }
 }
 
+export class TooManyRequestsError extends AppError {
+  constructor(
+    message = 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.',
+    retryAfterSeconds = 60,
+  ) {
+    super(message, 429);
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 export function todayISO() {
   const now = new Date();
   const year = now.getFullYear();

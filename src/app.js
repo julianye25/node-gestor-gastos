@@ -1,5 +1,6 @@
 import {
   CATEGORIES,
+  ConflictError,
   ForbiddenError,
   MAX_PASSWORD_LENGTH,
   MAX_USERNAME_LENGTH,
@@ -12,6 +13,8 @@ import {
   validatePassword,
 } from './domain.js';
 import { summarize } from './summary.js';
+import { seedDemoExpenses, rotateOldestDemoUser } from './demo.js';
+import { createRateLimiter } from './rate-limit.js';
 import {
   clearSessionCookie,
   parseCookies,
@@ -61,6 +64,14 @@ function isDatabaseUnavailable(error) {
   );
 }
 
+function clientKey(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.socket?.remoteAddress ?? 'desconocido';
+}
+
 function handleError(res, error) {
   let status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
   if (isDatabaseUnavailable(error)) status = 503;
@@ -80,7 +91,12 @@ function handleError(res, error) {
     message = error.message;
   }
 
-  sendJson(res, status, { error: message });
+  const extraHeaders = {};
+  if (status === 429 && Number.isFinite(error?.retryAfterSeconds)) {
+    extraHeaders['Retry-After'] = String(Math.ceil(error.retryAfterSeconds));
+  }
+
+  sendJson(res, status, { error: message }, extraHeaders);
 }
 
 function readJsonBody(req) {
@@ -159,7 +175,30 @@ export function createApp({ expenses, users, config }) {
     registrationCode,
     maxUsers,
     secureCookies,
+    demoMode,
+    demoUserTtlHours,
+    rateLimitWindowMinutes,
+    rateLimitMaxAttempts,
   } = config;
+
+  const rateLimitWindowMs = rateLimitWindowMinutes * 60_000;
+  const loginLimiter = createRateLimiter({
+    windowMs: rateLimitWindowMs,
+    maxAttempts: rateLimitMaxAttempts,
+  });
+  const registerLimiter = createRateLimiter({
+    windowMs: rateLimitWindowMs,
+    maxAttempts: rateLimitMaxAttempts,
+  });
+
+  // Serializa el conteo/rotación/creación para no superar MAX_USERS con
+  // registros simultáneos.
+  let registrationQueue = Promise.resolve();
+  function serializeRegistration(task) {
+    const result = registrationQueue.then(task, task);
+    registrationQueue = result.catch(() => {});
+    return result;
+  }
 
   function setSession(res, userId, extraHeaders = {}) {
     const token = signSession(userId, { secret: sessionSecret, days: sessionDays });
@@ -186,6 +225,8 @@ export function createApp({ expenses, users, config }) {
   }
 
   async function handleRegister(req, res) {
+    registerLimiter.check(clientKey(req));
+
     if (!registrationCode) {
       throw new ForbiddenError('El registro está cerrado');
     }
@@ -198,22 +239,52 @@ export function createApp({ expenses, users, config }) {
 
     const username = normalizeUsername(body.username);
     const password = validatePassword(body.password);
-
-    if ((await users.count()) >= maxUsers) {
-      throw new ForbiddenError('El registro está cerrado');
-    }
-
     const passwordHash = await hashPassword(password);
-    const user = await users.create({
-      username,
-      usernameLower: usernameKey(username),
-      passwordHash,
+    const now = new Date();
+
+    const user = await serializeRegistration(async () => {
+      // Comprueba el duplicado antes de rotar para no borrar una cuenta demo
+      // y luego fallar al crear la nueva.
+      if (await users.findByUsernameLower(usernameKey(username))) {
+        throw new ConflictError('Ese usuario ya existe');
+      }
+
+      if ((await users.count()) >= maxUsers) {
+        if (!demoMode) {
+          throw new ForbiddenError('El registro está cerrado');
+        }
+
+        const removed = await rotateOldestDemoUser({ users });
+        if (!removed) {
+          throw new ForbiddenError('El demo está completo. Inténtalo más tarde.');
+        }
+      }
+
+      return users.create({
+        username,
+        usernameLower: usernameKey(username),
+        passwordHash,
+        demo: demoMode,
+        expiresAt: demoMode
+          ? new Date(now.getTime() + demoUserTtlHours * 3_600_000)
+          : null,
+      });
     });
+
+    if (demoMode) {
+      try {
+        await seedDemoExpenses({ expenses, ownerId: user.id, now });
+      } catch (error) {
+        console.error('[demo] No se pudieron crear los gastos de ejemplo:', error.message);
+      }
+    }
 
     sendJson(res, 201, { user: publicUser(user) }, setSession(res, user.id));
   }
 
   async function handleLogin(req, res) {
+    loginLimiter.check(clientKey(req));
+
     const body = await readJsonBody(req);
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
@@ -249,7 +320,10 @@ export function createApp({ expenses, users, config }) {
 
     if (pathname === '/api/health') {
       if (method !== 'GET') return sendMethodNotAllowed(res, ['GET']);
-      return sendJson(res, 200, { ok: true });
+      return sendJson(res, 200, {
+        ok: true,
+        demo: { enabled: demoMode, ttlHours: demoMode ? demoUserTtlHours : 0 },
+      });
     }
 
     if (pathname === '/api/register') {
@@ -278,7 +352,11 @@ export function createApp({ expenses, users, config }) {
 
     if (pathname === '/api/meta') {
       if (method !== 'GET') return sendMethodNotAllowed(res, ['GET']);
-      return sendJson(res, 200, { categories: CATEGORIES, currency });
+      return sendJson(res, 200, {
+        categories: CATEGORIES,
+        currency,
+        demo: { enabled: demoMode, ttlHours: demoMode ? demoUserTtlHours : 0 },
+      });
     }
 
     if (pathname === '/api/expenses') {
@@ -362,6 +440,13 @@ export function createApp({ expenses, users, config }) {
   }
 
   return async function handle(req, res) {
+    if (secureCookies) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    if (demoMode) {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    }
+
     let url;
     try {
       url = new URL(req.url ?? '/', 'http://localhost');

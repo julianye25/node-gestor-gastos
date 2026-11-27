@@ -39,7 +39,10 @@ test('health responde sin sesión', async (t) => {
 
   const response = await request('/api/health');
   assert.equal(response.status, 200);
-  assert.deepEqual(response.data, { ok: true });
+  assert.deepEqual(response.data, {
+    ok: true,
+    demo: { enabled: false, ttlHours: 0 },
+  });
 });
 
 test('registro con invitación crea la cuenta e inicia sesión', async (t) => {
@@ -237,6 +240,7 @@ test('meta devuelve categorías y moneda', async (t) => {
   assert.equal(meta.status, 200);
   assert.deepEqual(meta.data.categories, CATEGORIES);
   assert.equal(meta.data.currency, 'COP');
+  assert.deepEqual(meta.data.demo, { enabled: false, ttlHours: 0 });
 });
 
 test('rechaza peticiones mutables con Origin ajeno', async (t) => {

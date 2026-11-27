@@ -23,6 +23,8 @@ const els = {
   currentUser: document.querySelector('#current-user'),
   logoutBtn: document.querySelector('#logout-btn'),
   exportBtn: document.querySelector('#export-btn'),
+  demoBanner: document.querySelector('#demo-banner'),
+  demoBannerText: document.querySelector('#demo-banner-text'),
 };
 
 const state = {
@@ -34,6 +36,7 @@ const state = {
   summary: null,
   editingId: null,
   user: null,
+  demo: null,
 };
 
 const ZERO_DECIMAL_CURRENCIES = new Set(['COP', 'CLP', 'PYG', 'VND', 'JPY', 'KRW']);
@@ -91,6 +94,28 @@ function formatDate(isoDate) {
     month: 'short',
     year: 'numeric',
   }).format(date);
+}
+
+function renderDemoBanner() {
+  if (!state.demo?.enabled) {
+    els.demoBanner.hidden = true;
+    return;
+  }
+
+  const expiresAt = state.user?.expiresAt ? new Date(state.user.expiresAt) : null;
+  let text = 'Modo demo: esta cuenta y sus datos se eliminan automáticamente.';
+
+  if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
+    const when = new Intl.DateTimeFormat('es-CO', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(expiresAt);
+    text = `Modo demo: esta cuenta y sus datos se eliminan el ${when}.`;
+  }
+
+  text += ' Si hay 4 cuentas activas, la más antigua se libera.';
+  els.demoBannerText.textContent = text;
+  els.demoBanner.hidden = false;
 }
 
 function plural(count, singular, pluralForm) {
@@ -551,6 +576,8 @@ async function boot() {
     const meta = await api('/api/meta');
     state.categories = meta.categories ?? [];
     state.currency = meta.currency || 'COP';
+    state.demo = meta.demo ?? null;
+    renderDemoBanner();
     els.currencySymbol.textContent = currencySymbol(state.currency);
     els.amount.placeholder = currencyDigits() === 0 ? '25000' : '0,00';
     fillCategoryOptions();

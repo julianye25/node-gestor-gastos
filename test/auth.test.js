@@ -25,7 +25,22 @@ test('hashPassword y verifyPassword funcionan con scrypt', async () => {
 
 test('publicUser no expone el hash de la contraseña', () => {
   const user = { id: 'abc', username: 'Ana', passwordHash: 'scrypt$...' };
-  assert.deepEqual(publicUser(user), { id: 'abc', username: 'Ana' });
+  assert.deepEqual(publicUser(user), {
+    id: 'abc',
+    username: 'Ana',
+    demo: false,
+    expiresAt: null,
+  });
+
+  assert.deepEqual(
+    publicUser({ ...user, demo: true, expiresAt: '2026-11-27T10:00:00.000Z' }),
+    {
+      id: 'abc',
+      username: 'Ana',
+      demo: true,
+      expiresAt: '2026-11-27T10:00:00.000Z',
+    },
+  );
 });
 
 test('firma y verifica una sesión', () => {

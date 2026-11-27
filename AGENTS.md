@@ -2,14 +2,14 @@
 
 ## Overview
 
-- Local-only, multi-user expense tracker for up to `MAX_USERS` accounts (default 4). The server binds to `127.0.0.1`; there is no deployment target and no Vercel/Render/serverless files. Do not add them unless the user explicitly changes this decision.
+- Local-first, multi-user expense tracker for up to `MAX_USERS` accounts (default 4). The real app binds to `127.0.0.1`; an optional public demo can be deployed manually to Render following `docs/render-demo.md`. Do not add Vercel/serverless artifacts or deployment automation unless the user asks.
 - UI and API error messages are in **Spanish**; keep new user-facing strings in Spanish.
 - Vanilla frontend + `node:http`; **no build step**. The only runtime dependency is `mongodb`. Do not add Express/React/Vite or other frameworks unless the user explicitly asks.
-- Each account has a private expense list. Auth is username/password + a signed `HttpOnly` cookie; registration requires an invite code.
+- Each account has a private expense list. Auth is username/password + a signed `HttpOnly` cookie; registration requires an invite code. In demo mode, accounts expire and are seeded with sample expenses.
 
 ## Commands
 
-- Node is pinned to 26.13.1 in `.node-version`; run `fnm use` first if the shell is not on v26.
+- Node is pinned to 26.13.1 in `.node-version`; run `fnm use` first if the shell is not on v26. The code also runs on Node 24 (Render's default).
 - `.env` is required locally and must define at least `MONGODB_URI` and `SESSION_SECRET`. Copy `.env.example` and adjust it.
 - `npm start` → http://127.0.0.1:3000 (localhost only).
 - `npm run dev` → same server with `node --watch src/server.js`.
@@ -24,23 +24,26 @@
 - `src/server.js` — local entrypoint. Loads `.env` with `process.loadEnvFile()`, validates config, serves static files from `public/`, delegates `/api/*` to `src/app.js`, adds security headers, and closes the Mongo client on `SIGINT`/`SIGTERM`. Do not add API routes here.
 - `src/app.js` — `createApp({ expenses, users, config })`: API router and auth flow (register, login, logout, `/api/me`, `/api/meta`, expenses CRUD, summary, export, health). Parses JSON bodies (1 MB limit), checks `Origin` on mutating requests, and maps errors to JSON `{ error }`.
 - `src/domain.js` — categories, limits, validation (`toCents`, dates, months, usernames, passwords, `validateExpense`) and error classes carrying `statusCode`.
-- `src/mongo.js` — `createMongoRepositories({ uri, dbName, expensesCollection, usersCollection })`; returns `{ expenses, users, close }`, creates indexes, and caches one `MongoClient` promise per URI.
-- `src/users.js` — `scrypt` password hashing/verification and `publicUser` (never expose `passwordHash`).
+- `src/mongo.js` — `createMongoRepositories({ uri, dbName, expensesCollection, usersCollection })`; returns `{ expenses, users, close }`, creates indexes, and caches one `MongoClient` promise per URI. A rejected connection is handled to avoid crashing the process at startup.
+- `src/demo.js` — demo helpers: `buildDemoExpenses`, `seedDemoExpenses`, `cleanupExpiredDemoUsers`, `rotateOldestDemoUser`, and `startDemoCleanup`.
+- `src/rate-limit.js` — in-memory fixed-window limiter; throws `TooManyRequestsError` (`429`). Resets on restart and is per process.
+- `src/users.js` — `scrypt` password hashing/verification and `publicUser` (never expose `passwordHash`; exposes `demo` and `expiresAt`).
 - `src/auth.js` — cookie parsing, HMAC session signing/verification, cookie headers.
 - `src/config.js` — environment validation and defaults; throws on invalid values.
 - `src/summary.js` — pure `summarize(expenses, { month })`.
-- `public/` — vanilla HTML/CSS/ES modules, no bundler: `index.html` + `app.js` (main UI), `login.html` + `login.js`, `register.html` + `register.js`, `styles.css`, `favicon.svg`.
+- `public/` — vanilla HTML/CSS/ES modules, no bundler: `index.html` + `app.js` (main UI), `login.html` + `login.js`, `register.html` + `register.js`, `styles.css`, `robots.txt`, `favicon.svg`.
 - `scripts/user.js` — CLI to list/create/delete accounts and reset passwords.
-- `test/` — domain, auth, API (in-memory repositories) and summary tests; `test/mongo.test.js` runs only when `MONGODB_URI_TEST` is set.
+- `docs/render-demo.md` — manual guide for the Render demo (Atlas, web service, env vars, smoke test, troubleshooting).
+- `test/` — domain, auth, API, demo (in-memory repositories) and summary tests; `test/mongo.test.js` runs only when `MONGODB_URI_TEST` is set.
 - `test-support/` — `memory.js` (in-memory repositories) and `server.js` (real API on a random port for tests).
 - `data/expenses.json` — **legacy** data from the single-user file-store version. The current app does not read it. Never delete or reset it; migrate only on explicit request.
 
 ## Data model (MongoDB)
 
 - Database `MONGODB_DB` (default `gestor_gastos`); collections `users` and `expenses` (names configurable via env).
-- `users`: `{ _id, username, usernameLower, passwordHash, createdAt }`; unique index on `usernameLower`.
+- `users`: `{ _id, username, usernameLower, passwordHash, demo, expiresAt, createdAt }`; unique index on `usernameLower`.
 - `expenses`: `{ _id, ownerId, amountCents, category, date, description, createdAt, updatedAt }`.
-- Indexes: `{ ownerId: 1, date: -1, createdAt: -1 }` and `{ ownerId: 1, category: 1, date: -1 }`.
+- Indexes: `{ ownerId: 1, date: -1, createdAt: -1 }`, `{ ownerId: 1, category: 1, date: -1 }`, `{ demo: 1, createdAt: 1 }`, `{ demo: 1, expiresAt: 1 }`.
 - `ownerId` is always derived from the session user; never accept it from the client.
 - Every read/update/delete filters by `ownerId`. A foreign expense id must return `404`, not `403`.
 - Runtime data lives in MongoDB. Tests must use `test-support/memory.js` or a disposable `MONGODB_URI_TEST` database; never the real database.
@@ -56,37 +59,41 @@
 ## Auth and security
 
 - Passwords: `scrypt` (N=16384, r=8, p=1, 64-byte key, 16-byte random salt, `maxmem` 64 MB) with `timingSafeEqual`; stored as `scrypt$N$r$p$salt$hash`. Usernames are 3–20 chars (`[\p{L}\p{N}._-]`); passwords 8–128 chars.
-- Cookie `gg_session`: `HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age=SESSION_DAYS`; `Secure` only when `COOKIE_SECURE=1` (local HTTP).
+- Cookie `gg_session`: `HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age=SESSION_DAYS`; `Secure` only when `COOKIE_SECURE=1` (local HTTP) and always on Render (`COOKIE_SECURE=1`).
 - `SESSION_SECRET` must be at least 32 characters; rotating it invalidates all sessions.
 - Registration: requires `REGISTRATION_CODE`; if empty, registration is closed (`403`). `MAX_USERS` (default 4) caps accounts. Duplicate username (case-insensitive) → `409`; wrong invite code → `403`.
+- Demo mode (`DEMO_MODE=1`): new accounts are marked `demo`, get `expiresAt = now + DEMO_USER_TTL_HOURS`, and receive 14 sample expenses. When the account cap is reached, the oldest demo account (and its expenses) is removed to make room. Expired demo accounts are cleaned hourly and at startup. Non-demo accounts are never rotated or expired.
+- Login/register are rate-limited per client IP (`RATE_LIMIT_WINDOW_MINUTES`, `RATE_LIMIT_MAX_ATTEMPTS`) and return `429` with `Retry-After`. The limiter is in memory: it resets on restart and is per process.
 - Login always returns `401` with "Usuario o contraseña incorrectos"; it verifies against a dummy hash for unknown users so timing does not reveal existence.
 - Mutating requests with an `Origin` header must match the `Host` (CSRF hardening); requests without `Origin` are allowed. JSON bodies are limited to 1 MB (`413`).
-- No rate limiting, email verification, password reset by email, or session revocation on password change. Use `npm run user -- passwd` to reset a password.
+- Demo mode also sends `X-Robots-Tag: noindex` and serves a closed `robots.txt`. HTTPS serves add HSTS.
+- No email verification, password reset by email, or session revocation on password change. Use `npm run user -- passwd` to reset a password (locally, pointing at the target database).
 
 ## API
 
 Public:
-- `GET /api/health` → `{ ok: true }`
+- `GET /api/health` → `{ ok: true, demo: { enabled, ttlHours } }`
 - `POST /api/register` → `201 { user }` + session cookie; body `{ inviteCode, username, password }`
 - `POST /api/login` → `{ user }` + session cookie; body `{ username, password }`
 - `POST /api/logout` → `204`, clears the cookie
 
 Session required:
-- `GET /api/me` → `{ user }`
-- `GET /api/meta` → `{ categories, currency }`
+- `GET /api/me` → `{ user }` (includes `demo` and `expiresAt`)
+- `GET /api/meta` → `{ categories, currency, demo: { enabled, ttlHours } }`
 - `GET /api/expenses?month=YYYY-MM&category=...` → `{ expenses }`
 - `POST /api/expenses` → `201 { expense }`
 - `GET|PUT|PATCH|DELETE /api/expenses/:id` → `{ expense }` / `{ ok: true }`
 - `GET /api/summary?month=YYYY-MM` → totals and breakdowns
 - `GET /api/export` → JSON attachment with the user's expenses
 
-Errors are JSON `{ error }`: `400` validation, `401` no session/bad login, `403` closed registration/bad invite/bad origin, `404` not found, `409` duplicate user, `413` body too large, `503` database unavailable. Unknown `/api/*` → JSON 404; missing static files → plain-text 404. `README.md` must be updated whenever routes, env vars, or defaults change.
+Errors are JSON `{ error }`: `400` validation, `401` no session/bad login, `403` closed registration/bad invite/bad origin, `404` not found, `409` duplicate user, `413` body too large, `429` rate limited (with `Retry-After`), `503` database unavailable. Unknown `/api/*` → JSON 404; missing static files → plain-text 404. `README.md` must be updated whenever routes, env vars, or defaults change.
 
 ## Frontend/CSS
 
 - Cyberpunk theme tokens live at the top of `public/styles.css` (`--bg`, `--cyan`, `--magenta`, `--font-mono`). Category neon colors are duplicated in `CATEGORY_COLORS` (`public/app.js`) and applied inline.
 - Keep `[hidden] { display: none !important; }` in the CSS: author `display` rules (e.g. `.btn`) otherwise override the `hidden` attribute used by the cancel button, toast, and empty state.
-- `public/app.js` redirects to `/login.html` on `401`, shows the current user, handles logout, and downloads `/api/export`.
+- `public/app.js` redirects to `/login.html` on `401`, shows the current user, handles logout, downloads `/api/export`, and shows the demo banner with the account expiry.
+- `register.js` reads `/api/health` to show the demo notice (24 h + rotation) only when demo mode is enabled.
 - Login/register pages redirect to `/` if a session already exists.
 - Static responses use `Cache-Control: no-cache`; login/register pages use `no-store`. Hard-reload if style/JS changes do not appear.
 - All new UI text must be Spanish.
@@ -104,25 +111,32 @@ Errors are JSON `{ error }`: `400` validation, `401` no session/bad login, `403`
 | `REGISTRATION_CODE` | empty (registration closed) | Share only with the 4 users |
 | `MAX_USERS` | `4` | |
 | `CURRENCY` | `COP` | 3-letter ISO code |
-| `HOST` | `127.0.0.1` | Keep local-only |
-| `PORT` | `3000` | |
+| `HOST` | `127.0.0.1` | Keep local; use `0.0.0.0` on Render |
+| `PORT` | `3000` | Render injects it |
 | `COOKIE_SECURE` | unset | Set `1` only if serving over HTTPS |
+| `DEMO_MODE` | `0` | `1` enables expiring demo accounts, seeding and rotation |
+| `DEMO_USER_TTL_HOURS` | `24` | Demo account lifetime |
+| `RATE_LIMIT_WINDOW_MINUTES` | `15` | Rate-limit window |
+| `RATE_LIMIT_MAX_ATTEMPTS` | `10` | Attempts per IP and window |
+| `NODE_VERSION` | — | Render-only; `26.13.1` or `24.22.1` |
 
 - `.env` contains secrets and is gitignored (`.env`, `.env.*`, except `.env.example`). Never commit it.
+- The Render demo must use a **separate** Atlas database (for example `gestor_gastos_demo`), never the real one. Manual steps: `docs/render-demo.md`.
 - Atlas free tier pauses after inactivity and has no reliable backups; use `GET /api/export` and document manual backups.
-- Never print `.env` values, `MONGODB_URI`, or password hashes in logs or responses.
+- Never print `.env` values, `MONGODB_URI`, or password hashes in logs or responses. The startup ping logs only the database and collection names.
 
 ## Tests
 
-- `npm test` runs domain, auth, API and summary tests; `test/mongo.test.js` is skipped unless `MONGODB_URI_TEST` is defined.
+- `npm test` runs domain, auth, API, demo and summary tests; `test/mongo.test.js` is skipped unless `MONGODB_URI_TEST` is defined.
 - API tests use `startTestServer()` from `test-support/server.js`, which mounts the real `createApp` on a random port over in-memory repositories.
-- Required coverage when adding features: validation, password hashing/session cookies, registration/login/logout, API behavior, ownership isolation (A cannot read/edit/delete B), summary/export scoping, and filters.
+- Required coverage when adding features: validation, password hashing/session cookies, registration/login/logout, API behavior, ownership isolation (A cannot read/edit/delete B), summary/export scoping, filters, demo seeding/expiry/rotation and rate limiting.
+- Demo tests pass `DEMO_MODE=1` and use `cleanupExpiredDemoUsers` with a future `now`; never wait for real timers.
 - MongoDB integration: `MONGODB_URI_TEST='mongodb://127.0.0.1:27017' npm test`. It creates a random database and drops it at the end. Never point tests at the real `MONGODB_URI`.
 - There is no frontend test runner; use `npm run check` and manual checks.
 
 ## Known gaps / possible follow-ups
 
 - Optional migration of `data/expenses.json` into a specific account.
-- Optional rate limiting for login/register.
+- Rate limiting is in-memory; a multi-instance deployment would need a shared store.
 - Optional password-change endpoint with session revocation.
-- Do not add Vercel/Render/serverless files unless the user explicitly changes the local-only decision.
+- The Render demo is manual by design; do not add `render.yaml`, Vercel or serverless artifacts unless the user asks.

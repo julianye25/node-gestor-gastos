@@ -61,5 +61,10 @@ export async function verifyPassword(password, storedHash) {
 }
 
 export function publicUser(user) {
-  return { id: user.id, username: user.username };
+  return {
+    id: user.id,
+    username: user.username,
+    demo: user.demo === true,
+    expiresAt: user.expiresAt ?? null,
+  };
 }

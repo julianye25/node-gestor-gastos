@@ -57,6 +57,21 @@ export function createMemoryRepositories() {
       return expense;
     },
 
+    async createMany(ownerId, inputs) {
+      if (!Array.isArray(inputs) || inputs.length === 0) return [];
+
+      const createdAt = new Date().toISOString();
+      const created = inputs.map((input) => ({
+        id: randomUUID(),
+        ownerId,
+        ...validateExpense(input),
+        createdAt,
+        updatedAt: null,
+      }));
+      expenseItems.push(...created);
+      return created;
+    },
+
     async update(ownerId, id, input) {
       const index = expenseItems.findIndex(
         (expense) => expense.ownerId === ownerId && expense.id === id,
@@ -96,7 +111,7 @@ export function createMemoryRepositories() {
       return userItems.length;
     },
 
-    async create({ username, usernameLower, passwordHash }) {
+    async create({ username, usernameLower, passwordHash, demo = false, expiresAt = null }) {
       if (userItems.some((user) => user.usernameLower === usernameLower)) {
         throw new ConflictError('Ese usuario ya existe');
       }
@@ -106,6 +121,8 @@ export function createMemoryRepositories() {
         username,
         usernameLower,
         passwordHash,
+        demo: Boolean(demo),
+        expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
         createdAt: new Date().toISOString(),
       };
       userItems.push(user);
@@ -135,6 +152,44 @@ export function createMemoryRepositories() {
 
     async listAll() {
       return [...userItems];
+    },
+
+    async findOldestDemo() {
+      const demoUsers = userItems
+        .filter((user) => user.demo)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+      return demoUsers[0] ?? null;
+    },
+
+    async removeOldestDemo() {
+      const oldest = userItems
+        .filter((user) => user.demo)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))[0];
+      if (!oldest) return null;
+
+      const index = userItems.findIndex((user) => user.id === oldest.id);
+      if (index !== -1) userItems.splice(index, 1);
+      for (let i = expenseItems.length - 1; i >= 0; i -= 1) {
+        if (expenseItems[i].ownerId === oldest.id) expenseItems.splice(i, 1);
+      }
+      return oldest;
+    },
+
+    async removeExpiredDemo(now = new Date()) {
+      const limit = now instanceof Date ? now : new Date(now);
+      const expired = userItems.filter(
+        (user) => user.demo && user.expiresAt && new Date(user.expiresAt) <= limit,
+      );
+      if (expired.length === 0) return 0;
+
+      const ids = new Set(expired.map((user) => user.id));
+      for (let i = userItems.length - 1; i >= 0; i -= 1) {
+        if (ids.has(userItems[i].id)) userItems.splice(i, 1);
+      }
+      for (let i = expenseItems.length - 1; i >= 0; i -= 1) {
+        if (ids.has(expenseItems[i].ownerId)) expenseItems.splice(i, 1);
+      }
+      return expired.length;
     },
   };
 
